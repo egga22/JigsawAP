@@ -250,8 +250,8 @@ document.getElementById("yamlFileInput").addEventListener("change", function(eve
             resolved.total_size_of_image = resolveNumericOption(settings.total_size_of_image, 30, 100);
 
             // Direct nx/ny overrides (non-standard but convenient)
-            if (settings.nx !== undefined) resolved.direct_nx = resolveNumericOption(settings.nx, 2, 20);
-            if (settings.ny !== undefined) resolved.direct_ny = resolveNumericOption(settings.ny, 2, 20);
+            if (settings.nx !== undefined) resolved.direct_nx = resolveNumericOption(settings.nx, 2, 50);
+            if (settings.ny !== undefined) resolved.direct_ny = resolveNumericOption(settings.ny, 2, 50);
 
             window._soloYamlSettings = resolved;
 
@@ -307,13 +307,12 @@ function setSelectClosest(sel, value) {
     sel.selectedIndex = bestIdx;
 }
 
-// Auto-select hex shape when hex grid is chosen
+// Auto-suggest rotation when hex grid is chosen (only if not already set by YAML)
 document.getElementById("solo_grid_type").addEventListener("change", function() {
     if (this.value === "6") {
-        document.getElementById("solo_rotations").value = "60";
-    } else {
-        if (document.getElementById("solo_rotations").value === "60") {
-            document.getElementById("solo_rotations").value = "0";
+        const rotSel = document.getElementById("solo_rotations");
+        if (rotSel.value === "0") {
+            rotSel.value = "60";
         }
     }
 });
@@ -341,6 +340,7 @@ function pressed_solo(){
     // Apply rotations
     if (rotationVal > 0) {
         window.rotations = rotationVal;
+        // zero_list tracks valid rotation states per piece; length 2 for 180° (0/180), length 3 for 90°/60° etc.
         window.zero_list = rotationVal === 180 ? [0, 0] : [0, 0, 0];
     }
 
