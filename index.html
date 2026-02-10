@@ -8,6 +8,7 @@
   <meta name="theme-color" content="#4dabf7">
   <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
   <meta name="mobile-web-app-capable" content="yes">
+  <script src="./js-yaml.min.js"></script>
 
 </head>
 <body>
@@ -99,13 +100,44 @@
             <label id="error-label" class="login-label" style="color: red;"></label>
           </div>
           <div style="margin-top: 5px; font-size: 0.9em; color: white; border: 2px solid #4dabf74d; padding: 10px; text-align: center; border-radius: 10px;">
-            <div style="color: #fff; font-weight: bold; margin-bottom: 8px;">Try it out solo (fixed seed, no save)</div>
+            <div style="color: #fff; font-weight: bold; margin-bottom: 8px;">Solo Play</div>
             <hr style="border: 1px solid #4dabf74d; margin: 8px 0;">
-            <div style="display: flex; gap: 10px;">
-              <input type="submit" value="Normal" id="solobutton" class="login-submit">
-              <input type="submit" value="Rotations" id="solobutton2" class="login-submit">
-              <input type="submit" value="Hex" id="solobutton3" class="login-submit">
+
+            <div style="text-align: left; margin-bottom: 8px;">
+              <label class="login-label" style="font-size: 0.9em;">Upload YAML (optional):</label>
+              <input type="file" id="yamlFileInput" accept=".yaml,.yml" style="width: 100%; color: white; font-size: 0.85em; margin-bottom: 4px;">
+              <div id="yamlStatus" style="font-size: 0.8em; color: #aaa;"></div>
             </div>
+
+            <hr style="border: 1px solid #4dabf74d; margin: 8px 0;">
+            <div style="text-align: left; font-size: 0.85em;">
+              <label class="login-label" style="margin-bottom: 2px;">Columns (nx):
+                <input type="number" id="solo_nx" class="login-input" style="width: 60px; display: inline; padding: 4px; margin-bottom: 4px;" value="6" min="2" max="50">
+              </label>
+              <label class="login-label" style="margin-bottom: 2px;">Rows (ny):
+                <input type="number" id="solo_ny" class="login-input" style="width: 60px; display: inline; padding: 4px; margin-bottom: 4px;" value="4" min="2" max="50">
+              </label>
+              <label class="login-label" style="margin-bottom: 2px;">Grid Type:
+                <select id="solo_grid_type" class="login-input" style="width: auto; display: inline; padding: 4px; margin-bottom: 4px;">
+                  <option value="4" selected>Square</option>
+                  <option value="6">Hexagon</option>
+                </select>
+              </label>
+              <label class="login-label" style="margin-bottom: 2px;">Rotations:
+                <select id="solo_rotations" class="login-input" style="width: auto; display: inline; padding: 4px; margin-bottom: 4px;">
+                  <option value="0" selected>None</option>
+                  <option value="180">180°</option>
+                  <option value="90">90°</option>
+                  <option value="60">60° (hex)</option>
+                </select>
+              </label>
+              <label class="login-label" style="margin-bottom: 2px;">
+                <input type="checkbox" id="solo_uniform" style="vertical-align: middle;"> Uniform piece size
+              </label>
+            </div>
+
+            <hr style="border: 1px solid #4dabf74d; margin: 8px 0;">
+            <input type="submit" value="▶ Start Solo" id="solobutton" class="login-submit" style="font-size: 1.1em;">
           </div>
       </div>
 

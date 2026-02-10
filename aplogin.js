@@ -17,18 +17,6 @@ document.getElementById('password').value = getUrlParameter('password') || '';
 document.getElementById("loginbutton").addEventListener("click", pressed_login);
 
 document.getElementById("solobutton").addEventListener("click", pressed_solo);
-document.getElementById("solobutton2").addEventListener("click", () => {
-    window.rotations = 90;
-    window.zero_list = [0,0,0];
-    pressed_solo();
-});
-document.getElementById("solobutton3").addEventListener("click", () => {
-    window.pieceSides = 6;
-    window.rotations = 60;
-    window.make_pieces_square = true;
-    document.getElementById("shape").value = "5";
-    pressed_solo();
-});
 
 document.getElementById('name').addEventListener('keypress', function(event) {
     if (event.key === 'Enter') {
@@ -77,68 +65,392 @@ function pressed_login(){
 }
 
 window.play_solo = false;
+window._soloYamlSettings = null;
+
+// Resolve an Archipelago weighted option value.
+// Weighted options look like: { "option_a": 50, "option_b": 0, "random": 0 }
+// or can be a plain value (number/string/boolean).
+function resolveWeightedOption(val) {
+    if (val === undefined || val === null) return undefined;
+    // Plain value
+    if (typeof val !== "object" || Array.isArray(val)) return val;
+    // Weighted map: pick the key with the highest weight, resolving "random" specially
+    const entries = Object.entries(val);
+    if (entries.length === 0) return undefined;
+    // Filter out zero-weight entries
+    let candidates = entries.filter(([k, w]) => typeof w === "number" && w > 0);
+    if (candidates.length === 0) {
+        // All zero weights — just pick the first key
+        candidates = entries;
+    }
+    // Sum weights for weighted random selection
+    const totalWeight = candidates.reduce((sum, [, w]) => sum + (typeof w === "number" && w > 0 ? w : 1), 0);
+    let roll = Math.random() * totalWeight;
+    for (const [key, weight] of candidates) {
+        const w = (typeof weight === "number" && weight > 0) ? weight : 1;
+        roll -= w;
+        if (roll <= 0) {
+            // Handle special string keys
+            if (key === "random") return "random";
+            if (key === "random-low") return "random-low";
+            if (key === "random-high") return "random-high";
+            if (key === "true") return true;
+            if (key === "false") return false;
+            if (key === "disabled") return 0;
+            if (key === "normal") return 50;
+            if (key === "extreme") return 99;
+            // Try parsing as number
+            const num = Number(key);
+            if (!isNaN(num)) return num;
+            return key;
+        }
+    }
+    return entries[0][0];
+}
+
+// Resolve a numeric weighted option, handling "random" within a min/max range
+function resolveNumericOption(val, min, max) {
+    const resolved = resolveWeightedOption(val);
+    if (resolved === undefined) return undefined;
+    if (resolved === "random") return Math.floor(Math.random() * (max - min + 1)) + min;
+    if (resolved === "random-low") return Math.floor(Math.random() * ((min + max) / 2 - min + 1)) + min;
+    if (resolved === "random-high") return Math.floor(Math.random() * (max - (min + max) / 2 + 1)) + Math.ceil((min + max) / 2);
+    const num = Number(resolved);
+    if (!isNaN(num)) return Math.max(min, Math.min(max, num));
+    return undefined;
+}
+
+// Grid type and rotation mapping from the combined YAML option
+const GRID_ROTATION_MAP = {
+    "square_no_rotation":              { grid: 4, rotation: 0 },
+    "square_180_rotation":             { grid: 4, rotation: 180 },
+    "square_90_rotation":              { grid: 4, rotation: 90 },
+    "hex_no_rotation":                 { grid: 6, rotation: 0 },
+    "hex_180_rotation":                { grid: 6, rotation: 180 },
+    "hex_120_rotation":                { grid: 6, rotation: 120 },
+    "hex_60_rotation":                 { grid: 6, rotation: 60 },
+    "meme_one_row_no_rotation":        { grid: 4, rotation: 0, meme: "row" },
+    "meme_one_row_180_rotation":       { grid: 4, rotation: 180, meme: "row" },
+    "meme_one_column_no_rotation":     { grid: 4, rotation: 0, meme: "col" },
+    "meme_one_column_180_rotation":    { grid: 4, rotation: 180, meme: "col" },
+};
+
+// Border type name to index mapping
+const BORDER_TYPE_MAP = {
+    "classic": 1, "triangle": 2, "curved": 3, "diagonal": 4, "straight": 5, "chaos": 6
+};
+
+// Compute nx, ny from number_of_pieces and orientation aspect ratio
+function computeGridDimensions(numPieces, orientation) {
+    const ratios = {
+        "square":         { w: 1,   h: 1 },
+        "landscape":      { w: 1.5, h: 1 },
+        "portrait":       { w: 0.8, h: 1 },
+        "more_landscape": { w: 2,   h: 1 },
+        "more_portrait":  { w: 0.5, h: 1 },
+    };
+    const ratio = ratios[orientation] || ratios["landscape"];
+    // ny = sqrt(numPieces * h / w), nx = numPieces / ny
+    let ny = Math.max(2, Math.round(Math.sqrt(numPieces * ratio.h / ratio.w)));
+    let nx = Math.max(2, Math.round(numPieces / ny));
+    return { nx, ny };
+}
+
+// Handle YAML file upload
+document.getElementById("yamlFileInput").addEventListener("change", function(event) {
+    const file = event.target.files[0];
+    const statusEl = document.getElementById("yamlStatus");
+    if (!file) {
+        window._soloYamlSettings = null;
+        statusEl.textContent = "";
+        return;
+    }
+    const reader = new FileReader();
+    reader.onload = function(e) {
+        try {
+            const parsed = jsyaml.load(e.target.result);
+            // Find the Jigsaw settings section — look for a "Jigsaw" key or the game name key
+            let settings = null;
+            if (parsed && typeof parsed === "object") {
+                if (parsed["Jigsaw"] && typeof parsed["Jigsaw"] === "object") {
+                    settings = parsed["Jigsaw"];
+                } else {
+                    // Try to find a key that contains known Jigsaw options
+                    const knownKeys = ["number_of_pieces", "grid_type_and_rotations", "border_type",
+                                       "uniform_piece_size", "enable_clues", "which_image",
+                                       "nx", "ny", "grid_type", "rotations"];
+                    for (const key of Object.keys(parsed)) {
+                        if (typeof parsed[key] === "object" && parsed[key] !== null && !Array.isArray(parsed[key])) {
+                            if (knownKeys.some(k => parsed[key][k] !== undefined)) {
+                                settings = parsed[key];
+                                break;
+                            }
+                        }
+                    }
+                    // If still not found, check if top-level has known keys
+                    if (!settings && knownKeys.some(k => parsed[k] !== undefined)) {
+                        settings = parsed;
+                    }
+                }
+            }
+
+            if (!settings) {
+                statusEl.style.color = "#ff4444";
+                statusEl.textContent = "✗ No Jigsaw settings found in YAML";
+                window._soloYamlSettings = null;
+                return;
+            }
+
+            // Resolve all weighted options
+            const resolved = {};
+            // Number of pieces
+            resolved.number_of_pieces = resolveNumericOption(settings.number_of_pieces, 4, 2000);
+
+            // Grid type and rotations (combined option)
+            const gridRotVal = resolveWeightedOption(settings.grid_type_and_rotations);
+            if (gridRotVal && gridRotVal !== "random" && GRID_ROTATION_MAP[gridRotVal]) {
+                const gr = GRID_ROTATION_MAP[gridRotVal];
+                resolved.grid = gr.grid;
+                resolved.rotation = gr.rotation;
+                resolved.meme = gr.meme || null;
+            } else if (gridRotVal === "random") {
+                const allOptions = Object.keys(GRID_ROTATION_MAP);
+                const pick = allOptions[Math.floor(Math.random() * allOptions.length)];
+                const gr = GRID_ROTATION_MAP[pick];
+                resolved.grid = gr.grid;
+                resolved.rotation = gr.rotation;
+                resolved.meme = gr.meme || null;
+            } else {
+                // Fallback: check separate grid_type and rotations
+                const gt = resolveWeightedOption(settings.grid_type);
+                if (gt !== undefined) resolved.grid = (parseInt(gt) === 6) ? 6 : 4;
+                const rot = resolveWeightedOption(settings.rotations);
+                if (rot !== undefined) resolved.rotation = parseInt(rot) || 0;
+            }
+
+            // Orientation and image
+            resolved.orientation = resolveWeightedOption(settings.orientation_of_image);
+            if (resolved.orientation === "random") {
+                const opts = ["square", "landscape", "portrait", "more_landscape", "more_portrait"];
+                resolved.orientation = opts[Math.floor(Math.random() * opts.length)];
+            }
+            resolved.which_image = resolveNumericOption(settings.which_image, 1, 54);
+
+            // Other options
+            resolved.uniform_piece_size = resolveWeightedOption(settings.uniform_piece_size);
+            const bt = resolveWeightedOption(settings.border_type);
+            if (bt === "random") {
+                resolved.border_type = Math.floor(Math.random() * 6) + 1;
+            } else if (typeof bt === "string" && BORDER_TYPE_MAP[bt] !== undefined) {
+                resolved.border_type = BORDER_TYPE_MAP[bt];
+            } else if (typeof bt === "number") {
+                resolved.border_type = bt;
+            }
+            resolved.enable_clues = resolveWeightedOption(settings.enable_clues);
+            resolved.total_size_of_image = resolveNumericOption(settings.total_size_of_image, 30, 100);
+
+            // Direct nx/ny overrides (non-standard but convenient)
+            if (settings.nx !== undefined) resolved.direct_nx = resolveNumericOption(settings.nx, 2, 20);
+            if (settings.ny !== undefined) resolved.direct_ny = resolveNumericOption(settings.ny, 2, 20);
+
+            window._soloYamlSettings = resolved;
+
+            // Compute grid dimensions from number_of_pieces + orientation
+            let nx = 6, ny = 4;
+            if (resolved.direct_nx !== undefined && resolved.direct_ny !== undefined) {
+                nx = resolved.direct_nx;
+                ny = resolved.direct_ny;
+            } else if (resolved.number_of_pieces) {
+                const dims = computeGridDimensions(resolved.number_of_pieces, resolved.orientation || "landscape");
+                nx = dims.nx;
+                ny = dims.ny;
+                // Handle meme modes
+                if (resolved.meme === "row") { nx = resolved.number_of_pieces; ny = 1; }
+                if (resolved.meme === "col") { nx = 1; ny = resolved.number_of_pieces; }
+            }
+
+            // Update UI controls to reflect resolved settings
+            document.getElementById("solo_nx").value = nx;
+            document.getElementById("solo_ny").value = ny;
+
+            if (resolved.grid !== undefined) {
+                document.getElementById("solo_grid_type").value = (resolved.grid === 6) ? "6" : "4";
+            }
+            if (resolved.rotation !== undefined) {
+                const rotSel = document.getElementById("solo_rotations");
+                setSelectClosest(rotSel, resolved.rotation);
+            }
+            if (resolved.uniform_piece_size !== undefined) {
+                document.getElementById("solo_uniform").checked = !!resolved.uniform_piece_size;
+            }
+
+            let summary = file.name;
+            if (resolved.number_of_pieces) summary += " | ~" + (nx * ny) + " pieces (" + nx + "×" + ny + ")";
+            statusEl.style.color = "#4caf50";
+            statusEl.textContent = "✓ " + summary;
+        } catch (err) {
+            window._soloYamlSettings = null;
+            statusEl.style.color = "#ff4444";
+            statusEl.textContent = "✗ Error parsing YAML: " + err.message;
+        }
+    };
+    reader.readAsText(file);
+});
+
+// Helper: set a <select> to the closest available value
+function setSelectClosest(sel, value) {
+    let bestIdx = 0, bestDiff = Infinity;
+    for (let i = 0; i < sel.options.length; i++) {
+        const diff = Math.abs(parseInt(sel.options[i].value) - value);
+        if (diff < bestDiff) { bestDiff = diff; bestIdx = i; }
+    }
+    sel.selectedIndex = bestIdx;
+}
+
+// Auto-select hex shape when hex grid is chosen
+document.getElementById("solo_grid_type").addEventListener("change", function() {
+    if (this.value === "6") {
+        document.getElementById("solo_rotations").value = "60";
+    } else {
+        if (document.getElementById("solo_rotations").value === "60") {
+            document.getElementById("solo_rotations").value = "0";
+        }
+    }
+});
+
 function pressed_solo(){
     window.play_solo = true;
-    
+
+    // Read settings from UI controls (which may have been set by YAML)
+    const nx = parseInt(document.getElementById("solo_nx").value) || 6;
+    const ny = parseInt(document.getElementById("solo_ny").value) || 4;
+    const gridType = parseInt(document.getElementById("solo_grid_type").value) || 4;
+    const rotationVal = parseInt(document.getElementById("solo_rotations").value) || 0;
+    const uniformSize = document.getElementById("solo_uniform").checked;
+
+    // Also read YAML-only settings (already resolved from weighted format)
+    const yaml = window._soloYamlSettings || {};
+
+    // Apply grid type
+    if (gridType === 6) {
+        window.pieceSides = 6;
+        window.make_pieces_square = true;
+        document.getElementById("shape").value = "5";
+    }
+
+    // Apply rotations
+    if (rotationVal > 0) {
+        window.rotations = rotationVal;
+        window.zero_list = rotationVal === 180 ? [0, 0] : [0, 0, 0];
+    }
+
+    // Apply uniform piece size
+    if (uniformSize) {
+        window.make_pieces_square = true;
+    }
+
+    // Apply border/shape from YAML
+    if (yaml.border_type !== undefined) {
+        const shapeSelect = document.getElementById("shape");
+        const index = parseInt(yaml.border_type, 10) - 1;
+        if (index >= 0 && index < shapeSelect.options.length) {
+            shapeSelect.selectedIndex = index;
+        }
+    }
+
+    // Apply total_size_of_image from YAML
+    if (yaml.total_size_of_image !== undefined) {
+        window.downsize_to_fit = yaml.total_size_of_image / 100;
+        if (window.pieceSides === 6) {
+            window.downsize_to_fit *= Math.min(nx / (nx + (1 - Math.sqrt(3) / 3) * 0.5), ny / (ny + 1));
+        }
+    }
+
+    // Apply clues from YAML
+    if (yaml.enable_clues !== undefined) {
+        window.show_clue = (yaml.enable_clues === 1 || yaml.enable_clues === true);
+    }
+
+    const totalPieces = nx * ny;
+
     if(window.pieceSides == 6){
         window.possible_merges = [];
         window.actual_possible_merges = [];
     }else{
-        window.possible_merges = [0, 0, 0, 0, 1, 1, 2, 2, 3, 4, 4, 6, 8, 10, 12, 13, 15, 16, 17, 18, 19, 20, 21, 22, 23];
-        window.actual_possible_merges = [0, 0, 0, 0, 1, 1, 2, 2, 3, 4, 4, 6, 8, 10, 12, 13, 15, 16, 17, 18, 19, 20, 21, 22, 23];
+        // Generate possible_merges based on the actual piece count
+        const totalMerges = totalPieces - 1;
+        let merges = [];
+        for (let i = 0; i < totalMerges; i++) {
+            merges.push(i);
+        }
+        window.possible_merges = merges;
+        window.actual_possible_merges = merges.slice();
     }
 
-    window.fake_pieces_mimic = []
+    window.fake_pieces_mimic = [];
 
     closeMenus();
 
-    window.set_puzzle_dim(6, 4);
+    window.set_puzzle_dim(nx, ny);
 
-    window.unlockPiece(23);
-    window.unlockPiece(2);
-    window.unlockPiece(12);
-    window.unlockPiece(18);
-    window.unlockPiece(7);
-    window.unlockPiece(13);
-    window.unlockPiece(21);
+    // Generate piece order: shuffled array of all piece indices
+    let allPieces = [];
+    for (let i = 0; i < totalPieces; i++) {
+        allPieces.push(i);
+    }
+    // Fisher-Yates shuffle
+    for (let i = allPieces.length - 1; i > 0; i--) {
+        const j = Math.floor(Math.random() * (i + 1));
+        [allPieces[i], allPieces[j]] = [allPieces[j], allPieces[i]];
+    }
+
+    // Unlock a portion of pieces initially (roughly 1/4 of total, minimum 1)
+    const initialUnlock = Math.max(1, Math.floor(totalPieces / 4));
+    for (let i = 0; i < initialUnlock; i++) {
+        window.unlockPiece(allPieces[i]);
+    }
     window.updateMergesLabels();
 
+    // Remaining pieces to unlock via merges
+    let remainingPieces = allPieces.slice(initialUnlock);
+
     function sendCheck(numberOfMerges){
-        let trans = {
-            1: 3,
-            2: 20,
-            3: 5,
-            4: 4,
-            5: 22,
-            6: 14,
-            7: 11,
-            8: 10,
-            9: 8,
-            10: 15,
-            11: 9,
-            12: 16,
-            13: 17,
-            14: 24,
-            15: 19,
-            16: 1,
-            17: 6
-        }
-        let val = trans.hasOwnProperty(numberOfMerges) ? trans[numberOfMerges] : -1;
-        if(val > 0){
-            setTimeout(() => {
-                window.unlockPiece(val);
-                playNewItemSound();
-                window.updateMergesLabels();
-            }, 300);
+        if (remainingPieces.length > 0) {
+            // Unlock a piece at certain merge milestones
+            const mergesNeeded = totalPieces - 1;
+            // Calculate how often to unlock: spread remaining pieces across remaining merges
+            const unlockInterval = Math.max(1, Math.floor(mergesNeeded / (remainingPieces.length + 1)));
+            if (numberOfMerges % unlockInterval === 0 || numberOfMerges >= mergesNeeded - remainingPieces.length) {
+                const piece = remainingPieces.shift();
+                if (piece !== undefined) {
+                    setTimeout(() => {
+                        window.unlockPiece(piece);
+                        playNewItemSound();
+                        window.updateMergesLabels();
+                    }, 300);
+                }
+            }
         }
     }
     function sendGoal(){
         console.log("You won!")
     }
+
+    // Choose image
     let ind = Math.floor(Math.random() * window.possibleImages.length);
-    let imagePath = window.possibleImages[ind]
+    let imagePath = window.possibleImages[ind];
     document.getElementById("defaultImageIndex").selectedIndex = ind;
     window.defaultImagePath = imagePath;
+
+    // YAML image override
+    if (yaml.which_image !== undefined) {
+        const imgIdx = parseInt(yaml.which_image);
+        if (imgIdx >= 1 && imgIdx <= window.possibleImages.length) {
+            imagePath = window.possibleImages[imgIdx - 1];
+            document.getElementById("defaultImageIndex").selectedIndex = imgIdx - 1;
+            window.defaultImagePath = imagePath;
+        }
+    }
 
     const overrideImage = getUrlParameter('image');
     if (overrideImage !== '') {
